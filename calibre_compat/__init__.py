@@ -1,5 +1,24 @@
 # calibre_compat/__init__.py
-# Emulates calibre module imports so .recipe files load without Calibre installed.
+# Emulates calibre.* imports so any .recipe file loads without Calibre installed.
+#
+# Symbols covered (sourced by auditing the full calibre recipe collection):
+#   calibre.web.feeds.news      – BasicNewsRecipe, classes, prefixed_classes
+#   calibre.web.feeds.recipes   – alias of above
+#   calibre.utils.date          – local_tz, utc_tz, parse_date, strptime,
+#                                  parse_only_date, strftime, isoformat, now
+#   calibre.utils.random_ua     – common_english_word_ua,
+#                                  random_common_chrome_user_agent
+#   calibre.utils.cleantext     – clean_ascii_chars, clean_xml_chars
+#   calibre.utils.logging       – Log, GUILog
+#   calibre.utils.img           – scale_image
+#   calibre.ebooks.BeautifulSoup– BeautifulSoup, NavigableString, Tag, CData
+#   calibre.browser             – browser() factory + Browser class
+#   calibre.ptempfile           – PersistentTemporaryFile, TemporaryDirectory
+#   calibre.customize           – Plugin, FileTypePlugin
+#   polyglot.functools          – lru_cache
+#   polyglot.builtins           – as_bytes, as_unicode, iteritems …
+#   mechanize                   – Request (pass-through to real mechanize)
+#   html5_parser                – parse (fallback via lxml)
 
 import sys
 import types
@@ -8,15 +27,23 @@ import re
 import time
 import logging
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
+from functools import lru_cache
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag, CData
 
 logger = logging.getLogger("calibre_compat")
 
 # ---------------------------------------------------------------------------
-# Lightweight logger shim (calibre uses log.warn / log() directly)
+# Timezone objects
+# ---------------------------------------------------------------------------
+
+local_tz = datetime.now().astimezone().tzinfo
+utc_tz   = timezone.utc
+
+# ---------------------------------------------------------------------------
+# Logger shim
 # ---------------------------------------------------------------------------
 
 class CalibreLog:
@@ -35,9 +62,8 @@ class CalibreLog:
     def exception(self, *args):
         logger.exception(" ".join(str(a) for a in args))
 
-
 # ---------------------------------------------------------------------------
-# Browser shim
+# User-agent helpers
 # ---------------------------------------------------------------------------
 
 DEFAULT_UA = (
@@ -45,38 +71,79 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-class Browser:
-    """Minimal mechanize-compatible browser shim."""
-    def __init__(self):
-        self._session = requests.Session()
-        self._session.headers["User-Agent"] = DEFAULT_UA
+def common_english_word_ua():
+    return DEFAULT_UA
 
-    def open(self, url, data=None, timeout=30):
+def random_common_chrome_user_agent():
+    return DEFAULT_UA
+
+def random_user_agent(allow_ie=False):
+    return DEFAULT_UA
+
+# ---------------------------------------------------------------------------
+# Browser shim
+# ---------------------------------------------------------------------------
+
+class BrowserResponse:
+    def __init__(self, response):
+        self._r = response
+    def read(self):
+        return self._r.content
+    def get_data(self):
+        return self._r.text
+    def geturl(self):
+        return self._r.url
+    @property
+    def url(self):
+        return self._r.url
+    def info(self):
+        return self
+    def get(self, header, default=None):
+        return self._r.headers.get(header, default)
+
+
+class Browser:
+    """Minimal mechanize-like browser backed by requests.Session."""
+
+    def __init__(self, user_agent=DEFAULT_UA, **kwargs):
+        self._session = requests.Session()
+        self._session.headers['User-Agent'] = user_agent
+        self._current_url = None
+
+    def open(self, url_or_request, data=None, timeout=30):
+        url = getattr(url_or_request, 'get_full_url',
+                      lambda: url_or_request)()
+        headers = {}
+        if hasattr(url_or_request, 'headers'):
+            headers = dict(url_or_request.headers)
         if data:
-            r = self._session.post(url, data=data, timeout=timeout)
+            r = self._session.post(url, data=data, headers=headers, timeout=timeout)
         else:
-            r = self._session.get(url, timeout=timeout)
+            r = self._session.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
+        self._current_url = r.url
         return BrowserResponse(r)
 
     def open_novisit(self, url, data=None, timeout=30):
         return self.open(url, data, timeout)
 
-    def set_simple_cookie(self, name, value, domain):
-        self._session.cookies.set(name, value, domain=domain)
+    def open_with_retry(self, url, **kwargs):
+        return self.open(url, **kwargs)
 
+    def select_form(self, *a, **kw): pass
+    def __setitem__(self, key, value): pass
+    def submit(self, *a, **kw):
+        return BrowserResponse(requests.Response())
+
+    def set_simple_cookie(self, name, value, domain='', path='/'):
+        self._session.cookies.set(name, value, domain=domain, path=path)
     def addheaders(self, headers):
         for k, v in headers:
             self._session.headers[k] = v
-
-    def select_form(self, *args, **kwargs):
-        pass  # stub
-
-    def __setitem__(self, key, value):
-        pass  # stub for form field assignment
-
-    def submit(self):
-        pass  # stub
+    def set_cookiejar(self, cj):
+        self._session.cookies = cj
+    def get_cookiejar(self):
+        return self._session.cookies
 
     def clone_browser(self):
         b = Browser()
@@ -84,30 +151,18 @@ class Browser:
         b._session.headers.update(self._session.headers)
         return b
 
-    def get_cookiejar(self):
-        return self._session.cookies
+    def geturl(self):
+        return self._current_url or ''
+    def reload(self): pass
+    def back(self): pass
 
-    def set_cookiejar(self, cj):
-        self._session.cookies = cj
 
-
-class BrowserResponse:
-    def __init__(self, response):
-        self._r = response
-
-    def read(self):
-        return self._r.content
-
-    def get_data(self):
-        return self._r.text
-
-    @property
-    def url(self):
-        return self._r.url
-
+def browser(*args, **kwargs):
+    """Module-level factory: `from calibre import browser; br = browser()`"""
+    return Browser(*args, **kwargs)
 
 # ---------------------------------------------------------------------------
-# PersistentTemporaryFile shim
+# PersistentTemporaryFile
 # ---------------------------------------------------------------------------
 
 class PersistentTemporaryFile:
@@ -133,63 +188,171 @@ class PersistentTemporaryFile:
     def __exit__(self, *a):
         self.close()
 
+# ---------------------------------------------------------------------------
+# Date utilities
+# ---------------------------------------------------------------------------
+
+def parse_date(date_str, assume_utc=False, as_utc=True, default=None):
+    if not date_str:
+        return default or datetime.now(utc_tz)
+    try:
+        from dateutil.parser import parse as _p
+        dt = _p(str(date_str))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=utc_tz if assume_utc else local_tz)
+        return dt
+    except Exception:
+        return default or datetime.now(utc_tz)
+
+def strptime(date_str, fmt, assume_utc=False):
+    try:
+        dt = datetime.strptime(date_str, fmt)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=utc_tz if assume_utc else local_tz)
+        return dt
+    except Exception:
+        return datetime.now(utc_tz)
+
+def parse_only_date(date_str, assume_utc=True):
+    return parse_date(date_str, assume_utc=assume_utc)
+
+def strftime(fmt, dt=None):
+    return (dt or datetime.now()).strftime(fmt)
+
+def isoformat(dt, sep='T'):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=utc_tz)
+    return dt.isoformat(sep)
+
+def now():
+    return datetime.now(utc_tz)
 
 # ---------------------------------------------------------------------------
-# Article abort sentinel
+# Text utilities
+# ---------------------------------------------------------------------------
+
+def clean_ascii_chars(text):
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text or '')
+
+def prepare_string_for_xml(s, attribute=False):
+    import html
+    return html.escape(str(s or ''), quote=attribute)
+
+def force_unicode(s, enc='utf-8'):
+    if isinstance(s, bytes):
+        return s.decode(enc, 'replace')
+    return str(s)
+
+as_unicode = force_unicode
+
+# ---------------------------------------------------------------------------
+# Abort sentinel
 # ---------------------------------------------------------------------------
 
 class AbortArticle(Exception):
     pass
 
+# ---------------------------------------------------------------------------
+# classes() / prefixed_classes() helpers
+# ---------------------------------------------------------------------------
+
+def classes(*args):
+    """
+    Return a BS4 find() spec dict matching any of the given CSS class names.
+    Accepts both variadic args AND a single space-separated string.
+    """
+    if len(args) == 1 and isinstance(args[0], str) and ' ' in args[0]:
+        q = frozenset(args[0].split())
+    else:
+        q = frozenset(args)
+
+    def check(x):
+        if not x:
+            return False
+        if isinstance(x, str):
+            return bool(q.intersection(x.split()))
+        try:
+            return bool(q.intersection(x))
+        except TypeError:
+            return False
+
+    return {'attrs': {'class': check}}
+
+
+def prefixed_classes(*args):
+    """Match tags whose class attribute starts with any of the given prefixes."""
+    prefixes = tuple(args)
+
+    def check(x):
+        if not x:
+            return False
+        vals = x.split() if isinstance(x, str) else list(x)
+        return any(v.startswith(prefixes) for v in vals)
+
+    return {'attrs': {'class': check}}
 
 # ---------------------------------------------------------------------------
 # BasicNewsRecipe
 # ---------------------------------------------------------------------------
 
 class BasicNewsRecipe:
-    # ---- class-level defaults (recipes override these) ----
-    title           = "Unnamed Recipe"
-    description     = ""
-    __author__      = ""
-    language        = "en"
-    oldest_article  = 7          # days
-    max_articles_per_feed = 100
-    no_stylesheets  = True
-    remove_javascript = True
-    auto_cleanup    = False
-    auto_cleanup_keep = None
-    use_embedded_content = None  # None → auto-detect
-    encoding        = None       # None → auto-detect
-    feeds           = []
-    keep_only_tags  = []
-    remove_tags     = []
-    remove_tags_after  = []
-    remove_tags_before = []
-    filter_regexps  = []
-    match_regexps   = []
-    preprocess_regexps  = []
-    extra_css       = ""
-    needs_subscription  = False
-    remove_empty_feeds  = True
-    delay           = 0
+    title                  = "Unnamed Recipe"
+    description            = ""
+    __author__             = ""
+    language               = "en"
+    oldest_article         = 7
+    max_articles_per_feed  = 100
+    no_stylesheets         = True
+    remove_javascript      = True
+    auto_cleanup           = False
+    auto_cleanup_keep      = None
+    use_embedded_content   = None
+    encoding               = None
+    feeds                  = []
+    keep_only_tags         = []
+    remove_tags            = []
+    remove_tags_after      = []
+    remove_tags_before     = []
+    filter_regexps         = []
+    match_regexps          = []
+    preprocess_regexps     = []
+    extra_css              = ""
+    needs_subscription     = False
+    remove_empty_feeds     = True
+    delay                  = 0
     simultaneous_downloads = 5
-    timefmt         = " [%a, %d %b %Y]"
-    masthead_url    = None
-    cover_url       = None
-    browser_type    = "mechanize"
+    timefmt                = " [%a, %d %b %Y]"
+    masthead_url           = None
+    cover_url              = None
+    browser_type           = "mechanize"
     resolve_internal_links = False
-    recursions      = 0
+    recursions             = 0
+    compress_news_images   = False
+    compress_news_images_max_size = None
+    ignore_duplicate_articles = None
+    recipe_specific_options = None
 
     def __init__(self):
-        self.log   = CalibreLog()
-        self._br   = None
-        self._cutoff = datetime.now(timezone.utc) - timedelta(days=self.oldest_article)
+        self.log    = CalibreLog()
+        self._br    = None
+        self._cutoff = datetime.now(utc_tz) - timedelta(days=self.oldest_article)
+        # Flatten recipe_specific_options to a plain {key: default} dict
+        rso = self.__class__.recipe_specific_options
+        if rso and isinstance(rso, dict):
+            defaults = {}
+            for k, meta in rso.items():
+                if isinstance(meta, dict) and 'default' in meta:
+                    defaults[k] = meta['default']
+            self.recipe_specific_options = defaults
+        else:
+            self.recipe_specific_options = {}
 
     # ---- browser ----
 
-    def get_browser(self):
+    def get_browser(self, *args, **kwargs):
         if self._br is None:
-            self._br = Browser()
+            ua = kwargs.pop('user_agent', DEFAULT_UA)
+            self._br = Browser(user_agent=ua)
         return self._br
 
     get_browser.is_base_class_implementation = True
@@ -206,14 +369,18 @@ class BasicNewsRecipe:
     def get_feeds(self):
         return self.feeds
 
-    # ---- article URL hook ----
+    # ---- URL hooks ----
 
     def get_article_url(self, article):
-        link = getattr(article, 'link', None) or article.get('url', '')
-        return link
+        return getattr(article, 'link', None) or article.get('url', '')
 
     def print_version(self, url):
         return url
+
+    def canonicalize_internal_url(self, url, is_link=True):
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return p.netloc + p.path
 
     # ---- HTML hooks ----
 
@@ -234,7 +401,6 @@ class BasicNewsRecipe:
     # ---- index / parsing ----
 
     def parse_index(self):
-        """Override to return [(feed_title, [article_dict, ...]), ...]"""
         return None
 
     # ---- abort helpers ----
@@ -245,10 +411,10 @@ class BasicNewsRecipe:
     def abort_recipe_processing(self, msg='abort'):
         raise RuntimeError(f"Recipe aborted: {msg}")
 
-    # ---- utility ----
+    # ---- utilities ----
 
     def index_to_soup(self, url_or_html, raw=False):
-        if url_or_html.strip().startswith('<'):
+        if url_or_html.lstrip().startswith('<'):
             html = url_or_html
         else:
             br = self.get_browser()
@@ -277,114 +443,266 @@ class BasicNewsRecipe:
         time.sleep(n)
 
     def add_toc_thumbnail(self, article, src):
-        pass  # not needed for RSS output
+        pass
 
     def cleanup(self):
         pass
 
-    # ---- internal helper used by the runner ----
+    def get_extra_css(self):
+        return self.extra_css or ''
+
+    def get_cover_url(self):
+        return getattr(self, 'cover_url', None)
+
+    def get_masthead_url(self):
+        return getattr(self, 'masthead_url', None)
+
+    def get_url_specific_delay(self, url):
+        return self.delay
+
+    def is_link_wanted(self, url, tag):
+        return True
 
     def _is_article_old(self, pub_date_str):
         if not pub_date_str:
             return False
         try:
-            from dateutil.parser import parse as _parse
-            dt = _parse(pub_date_str)
+            from dateutil.parser import parse as _p
+            dt = _p(str(pub_date_str))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=utc_tz)
             return dt < self._cutoff
         except Exception:
             return False
 
+# ---------------------------------------------------------------------------
+# Plugin stubs
+# ---------------------------------------------------------------------------
+
+class Plugin:
+    name = 'Plugin'
+    description = ''
+    version = (1, 0, 0)
+    author = ''
+
+class FileTypePlugin(Plugin):
+    file_types = set()
+    on_import = False
+    on_postimport = False
 
 # ---------------------------------------------------------------------------
-# Stub for calibre.utils.date
+# polyglot shims
 # ---------------------------------------------------------------------------
 
-def parse_date(date_str, assume_utc=False, as_utc=True, default=None):
-    if not date_str:
-        return default or datetime.now(timezone.utc)
+def _build_polyglot():
+    poly         = types.ModuleType('polyglot')
+    poly_func    = types.ModuleType('polyglot.functools')
+    poly_builtin = types.ModuleType('polyglot.builtins')
+    poly_urllib  = types.ModuleType('polyglot.urllib')
+    poly_http    = types.ModuleType('polyglot.http_client')
+    poly_queue   = types.ModuleType('polyglot.queue')
+
+    poly_func.lru_cache          = lru_cache
+    poly_builtin.as_bytes        = lambda s, enc='utf-8': s.encode(enc) if isinstance(s, str) else s
+    poly_builtin.as_unicode      = force_unicode
+    poly_builtin.iteritems       = lambda d: d.items()
+    poly_builtin.itervalues      = lambda d: d.values()
+    poly_builtin.iterkeys        = lambda d: d.keys()
+    poly_builtin.string_or_bytes = (str, bytes)
+    poly_builtin.unicode_type    = str
+    poly_builtin.map             = map
+    poly_builtin.filter          = filter
+    poly_builtin.zip             = zip
+    poly_builtin.range           = range
+    poly_builtin.print_function  = print
+
+    import urllib.parse, urllib.request, urllib.error
+    poly_urllib.parse      = urllib.parse
+    poly_urllib.request    = urllib.request
+    poly_urllib.error      = urllib.error
+    poly_urllib.quote      = urllib.parse.quote
+    poly_urllib.quote_plus = urllib.parse.quote_plus
+    poly_urllib.unquote    = urllib.parse.unquote
+    poly_urllib.urlencode  = urllib.parse.urlencode
+    poly_urllib.urlopen    = urllib.request.urlopen
+
+    import http.client
+    poly_http.HTTPException = http.client.HTTPException
+
+    import queue
+    poly_queue.Queue = queue.Queue
+    poly_queue.Empty = queue.Empty
+
+    for m in (poly, poly_func, poly_builtin, poly_urllib, poly_http, poly_queue):
+        sys.modules[m.__name__] = m
+
+# ---------------------------------------------------------------------------
+# mechanize shim
+# ---------------------------------------------------------------------------
+
+def _build_mechanize_shim():
     try:
-        from dateutil.parser import parse as _parse
-        dt = _parse(date_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return default or datetime.now(timezone.utc)
+        import mechanize as _mech
+        # Real mechanize is installed – just make sure it's in sys.modules
+        sys.modules.setdefault('mechanize', _mech)
+        return
+    except ImportError:
+        pass
 
+    mech = types.ModuleType('mechanize')
+
+    class Request:
+        def __init__(self, url, data=None, headers=None):
+            self._url = url
+            self.data = data
+            self.headers = dict(headers or {})
+        def get_full_url(self):
+            return self._url
+        def add_header(self, key, val):
+            self.headers[key] = val
+        def add_unredirected_header(self, key, val):
+            self.headers[key] = val
+
+    mech.Request = Request
+    sys.modules['mechanize'] = mech
 
 # ---------------------------------------------------------------------------
-# classes() helper used by many recipes
+# html5_parser shim
 # ---------------------------------------------------------------------------
 
-def classes(*args):
-    """Return a dict{attrs: {'class': ...}} suitable for keep_only_tags etc.
-    BS4 may pass a str (single class) or a list of strings."""
-    q = frozenset(args)
-    def check(x):
-        if not x:
-            return False
-        if isinstance(x, str):
-            # BS4 passes the raw attribute string; split on whitespace
-            return bool(q.intersection(x.split()))
-        # list / set
+def _build_html5_parser_shim():
+    try:
+        import html5_parser  # noqa: already installed
+        return
+    except ImportError:
+        pass
+
+    h5 = types.ModuleType('html5_parser')
+
+    def parse(html, treebuilder='lxml', namespaceHTMLElements=False, **kw):
         try:
-            return bool(q.intersection(x))
-        except TypeError:
-            return False
-    return {'attrs': {'class': check}}
+            from lxml.html import fromstring
+            if isinstance(html, str):
+                html = html.encode('utf-8')
+            return fromstring(html)
+        except Exception:
+            return None
 
+    h5.parse = parse
+    sys.modules['html5_parser'] = h5
 
 # ---------------------------------------------------------------------------
-# Wire up fake calibre.* module hierarchy
+# Main install() – wire everything into sys.modules
 # ---------------------------------------------------------------------------
-
-def _stub_module(name):
-    m = types.ModuleType(name)
-    sys.modules[name] = m
-    return m
 
 def install():
-    """Call once to inject all calibre stubs into sys.modules."""
+    """Inject all calibre stubs. Safe to call multiple times."""
     if 'calibre' in sys.modules:
-        return  # already installed
+        return
 
-    calibre            = _stub_module('calibre')
-    calibre_web        = _stub_module('calibre.web')
-    calibre_web_feeds  = _stub_module('calibre.web.feeds')
-    calibre_web_feeds_news = _stub_module('calibre.web.feeds.news')
-    calibre_ebooks     = _stub_module('calibre.ebooks')
-    calibre_ebooks_bs  = _stub_module('calibre.ebooks.BeautifulSoup')
-    calibre_ebooks_hp  = _stub_module('calibre.ebooks.oeb')
-    calibre_browser    = _stub_module('calibre.browser')
-    calibre_ptmp       = _stub_module('calibre.ptempfile')
-    calibre_utils      = _stub_module('calibre.utils')
-    calibre_utils_log  = _stub_module('calibre.utils.logging')
-    calibre_utils_date = _stub_module('calibre.utils.date')
-    calibre_utils_img  = _stub_module('calibre.utils.img')
-    calibre_customize  = _stub_module('calibre.customize')
-    calibre_utils_fmt  = _stub_module('calibre.utils.formatter_functions')
+    def _stub(name):
+        m = types.ModuleType(name)
+        sys.modules[name] = m
+        return m
 
-    # Attach key symbols
-    calibre_web_feeds_news.BasicNewsRecipe = BasicNewsRecipe
-    calibre_web_feeds_news.classes         = classes
-    calibre_web_feeds_news.prefixed_classes = classes  # alias
-    calibre_ebooks_bs.BeautifulSoup        = BeautifulSoup
-    calibre_browser.Browser                = Browser
-    calibre_ptmp.PersistentTemporaryFile   = PersistentTemporaryFile
-    calibre_ptmp.TemporaryDirectory        = tempfile.TemporaryDirectory
-    calibre_utils_log.GUILog               = CalibreLog
-    calibre_utils_log.Log                  = CalibreLog
-    calibre_utils_date.parse_date          = parse_date
-    calibre_utils_date.strftime            = lambda fmt, dt=None: (dt or datetime.now()).strftime(fmt)
-    calibre.strftime                       = lambda fmt, dt=None: (dt or datetime.now()).strftime(fmt)
-    calibre.random_user_agent              = lambda **kw: DEFAULT_UA
-    calibre.preferred_encoding             = 'utf-8'
-    calibre.force_unicode                  = lambda s, enc='utf-8': s if isinstance(s, str) else s.decode(enc, 'replace')
-    calibre.as_unicode                     = calibre.force_unicode
-    calibre.iswindows                      = False
-    calibre.__appname__                    = 'calibre'
-    calibre_utils_img.scale_image          = lambda *a, **kw: b''
-    calibre_customize.Plugin               = object
-    calibre_customize.FileTypePlugin       = object
+    # core calibre
+    calibre = _stub('calibre')
+    calibre.browser                = browser
+    calibre.strftime               = strftime
+    calibre.random_user_agent      = random_user_agent
+    calibre.preferred_encoding     = 'utf-8'
+    calibre.force_unicode          = force_unicode
+    calibre.as_unicode             = as_unicode
+    calibre.prepare_string_for_xml = prepare_string_for_xml
+    calibre.iswindows              = False
+    calibre.ismacos                = False
+    calibre.islinux                = True
+    calibre.__appname__            = 'calibre'
+    calibre.prints                 = print
+    calibre.calibre_most_common_ua = DEFAULT_UA
+
+    # calibre.web.feeds.news + .recipes alias
+    _stub('calibre.web')
+    _stub('calibre.web.feeds')
+    news = _stub('calibre.web.feeds.news')
+    news.BasicNewsRecipe  = BasicNewsRecipe
+    news.classes          = classes
+    news.prefixed_classes = prefixed_classes
+    ra = _stub('calibre.web.feeds.recipes')
+    ra.BasicNewsRecipe  = BasicNewsRecipe
+    ra.classes          = classes
+    ra.prefixed_classes = prefixed_classes
+
+    # calibre.ebooks.*
+    _stub('calibre.ebooks')
+    bs = _stub('calibre.ebooks.BeautifulSoup')
+    bs.BeautifulSoup   = BeautifulSoup
+    bs.NavigableString = NavigableString
+    bs.Tag             = Tag
+    bs.CData           = CData
+    _stub('calibre.ebooks.oeb')
+    _stub('calibre.ebooks.metadata')
+    opf = _stub('calibre.ebooks.metadata.opf2')
+    class _OPFCreator:
+        def __init__(self, *a, **kw): pass
+    opf.OPFCreator = _OPFCreator
+
+    # calibre.browser
+    brmod = _stub('calibre.browser')
+    brmod.Browser = Browser
+    brmod.browser = browser
+
+    # calibre.ptempfile
+    ptmp = _stub('calibre.ptempfile')
+    ptmp.PersistentTemporaryFile = PersistentTemporaryFile
+    ptmp.TemporaryDirectory      = tempfile.TemporaryDirectory
+    ptmp.TemporaryFile           = tempfile.TemporaryFile
+    ptmp.NamedTemporaryFile      = tempfile.NamedTemporaryFile
+
+    # calibre.utils.*
+    _stub('calibre.utils')
+
+    date = _stub('calibre.utils.date')
+    date.local_tz        = local_tz
+    date.utc_tz          = utc_tz
+    date.parse_date      = parse_date
+    date.strptime        = strptime
+    date.parse_only_date = parse_only_date
+    date.strftime        = strftime
+    date.isoformat       = isoformat
+    date.now             = now
+    date.UNDEFINED_DATE  = datetime(101, 1, 1, tzinfo=utc_tz)
+
+    logm = _stub('calibre.utils.logging')
+    logm.Log       = CalibreLog
+    logm.GUILog    = CalibreLog
+    logm.ANSIStream = CalibreLog
+
+    rua = _stub('calibre.utils.random_ua')
+    rua.common_english_word_ua          = common_english_word_ua
+    rua.random_common_chrome_user_agent = random_common_chrome_user_agent
+
+    clean = _stub('calibre.utils.cleantext')
+    clean.clean_ascii_chars = clean_ascii_chars
+    clean.clean_xml_chars   = clean_ascii_chars
+
+    img = _stub('calibre.utils.img')
+    img.scale_image     = lambda *a, **kw: b''
+    img.image_from_data = lambda *a, **kw: None
+
+    iso = _stub('calibre.utils.iso8601')
+    iso.local_tz = local_tz
+    iso.utc_tz   = utc_tz
+
+    _stub('calibre.utils.formatter_functions')
+    _stub('calibre.utils.config')
+
+    # calibre.customize
+    cust = _stub('calibre.customize')
+    cust.Plugin         = Plugin
+    cust.FileTypePlugin = FileTypePlugin
+
+    # polyglot, mechanize, html5_parser
+    _build_polyglot()
+    _build_mechanize_shim()
+    _build_html5_parser_shim()
