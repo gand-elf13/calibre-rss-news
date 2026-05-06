@@ -319,10 +319,20 @@ def parse_date(date_str, assume_utc=False, as_utc=True, default=None):
 # ---------------------------------------------------------------------------
 
 def classes(*args):
-    """Return a dict{attrs: {'class': True}} suitable for keep_only_tags etc."""
+    """Return a dict{attrs: {'class': ...}} suitable for keep_only_tags etc.
+    BS4 may pass a str (single class) or a list of strings."""
     q = frozenset(args)
     def check(x):
-        return bool(x.intersection(q)) if x else False
+        if not x:
+            return False
+        if isinstance(x, str):
+            # BS4 passes the raw attribute string; split on whitespace
+            return bool(q.intersection(x.split()))
+        # list / set
+        try:
+            return bool(q.intersection(x))
+        except TypeError:
+            return False
     return {'attrs': {'class': check}}
 
 

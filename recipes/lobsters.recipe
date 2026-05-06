@@ -1,0 +1,17 @@
+# recipes/lobsters.recipe
+# Lobste.rs – tech link aggregator, full content via RSS
+from calibre.web.feeds.news import BasicNewsRecipe
+
+class Lobsters(BasicNewsRecipe):
+    title          = 'Lobste.rs'
+    description    = 'Computing-focused link aggregator'
+    __author__     = 'example'
+    language       = 'en'
+    oldest_article = 2
+    max_articles_per_feed = 15
+    # The RSS feed includes full story descriptions
+    use_embedded_content = True
+
+    feeds = [
+        ('Lobste.rs', 'https://lobste.rs/rss'),
+    ]
