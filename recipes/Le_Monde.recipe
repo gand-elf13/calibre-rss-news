@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import json
+import re
+from datetime import date
+
+from calibre.web.feeds.news import BasicNewsRecipe
+
+
+class LeMondePremium(BasicNewsRecipe):
+    title = 'Le Monde'
+    __author__ = 'veezh, Martin Villard, Kabonix'
+    description = 'Édition complète sans pub ni bloc "Lire aussi" (Bypass Mobile API + Fix Images)'
+    publisher = 'Société Editrice du Monde'
+    publication_type = 'newspaper'
+    language = 'fr'
+    encoding = 'utf-8'
+
+    oldest_article = 1
+    no_stylesheets = True
+    ignore_duplicate_articles = {'title', 'url'}
+    reverse_article_order = True
+    remove_empty_feeds = True
+
+    # Autoriser Calibre à télécharger les images
+    auto_cleanup = False
+    delay = 1
+
+    # --- LOGIQUE DE DÉVERROUILLAGE ---
+    browser_user_agent = 'LeMonde/9.20.1 (Android; 14)'
+
+    def get_browser(self, *args, **kwargs):
+        br = BasicNewsRecipe.get_browser(self, *args, **kwargs)
+        br.addheaders = [
+            ('User-Agent', self.browser_user_agent),
+            ('X-Lmd-Token', 'TWPLMOLMO'),
+            ('Accept', 'application/json')
+        ]
+        return br
+
+    def get_article_url(self, article):
+        url = BasicNewsRecipe.get_article_url(self, article)
+        # On transforme l'URL web en URL API mobile
+        match = re.search(r'_(\d+)_\d+\.html', url)
+        if match:
+            article_id = match.group(1)
+            return f'https://apps.lemonde.fr/aec/v1/premium-android-phone/article/{article_id}'
+        return url
+
+    def preprocess_raw_html(self, raw_html, url):
+        # L'API renvoie du JSON, on extrait le HTML brut contenu dedans
+        if '/aec/v1/' in url:
+            try:
+                data = json.loads(raw_html)
+                content = data['template_vars']['content']
+                title = data['template_vars'].get('seo_title', 'Le Monde')
+
+                # 1. FIX URL GENERATION : On remplace les placeholders {{width}} par une valeur fixe
+                # Cela active les URLs d'images qui sont souvent sous la forme template
+                content = content.replace('%7B%7Bwidth%7D%7D', '1000').replace('{{width}}', '1000')
+                content = content.replace('%7B%7Bheight%7D%7D', '600').replace('{{height}}', '600')
+
+                return f'<html><head><title>{title}</title></head><body>{content}</body></html>'
+            except Exception:
+                return raw_html
+        return raw_html
+
+    # --- COUVERTURE ---
+    def get_cover_url(self):
+        cover_id = date.today().strftime('%Y%m%d')
+        return 'https://www.lemonde.fr/thumbnail/journal/' + cover_id + '/1000/1490'
+
+    # --- NETTOYAGE ---
+    keep_only_tags = [
+        dict(name='h1', attrs={'class': ['heading', 'article__title']}),
+        dict(name='div', attrs={'class': ['kicker', 'article__desc']}),
+        # On garde le conteneur principal et les figures (images)
+        dict(name='div', attrs={'class': ['article_content', 'article__content']}),
+        dict(name='figure')
+    ]
+
+    remove_tags = [
+        dict(name='div', attrs={'class': [
+            'see-also-container', 'inread-container', 'premium-container',
+            'restricted-reading', 'offer-container', 'authors-container',
+            'js-init-line-clamp', 'bloc-reactions', 'meta__publisher'
+        ]}),
+        dict(name=['aside', 'footer', 'button', 'svg', 'script', 'style', 'video'])
+    ]
+
+    extra_css = '''
+        h1 { font-size: 1.6em; font-weight: bold; font-family: serif; mb: 0.5em; }
+        .kicker { font-size: 1.1em; font-style: italic; color: #444; margin-bottom: 1.5em; }
+        p { margin-bottom: 1em; text-align: justify; line-height: 1.4; }
+        figure { margin: 1em 0; padding: 0; text-align: center; }
+        img { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+        figcaption, .caption { font-size: 0.8em; color: #666; font-family: sans-serif; margin-top: 0.5em; }
+    '''
+
+    def preprocess_html(self, soup):
+        # --- FIX DES BLOCS VIDES (IMAGES) ---
+        for img in soup.find_all('img'):
+            # 1. Gestion du Lazy Loading : Si 'data-src' existe, c'est la vraie image
+            if img.has_attr('data-src'):
+                img['src'] = img['data-src']
+
+            # 2. Gestion des srcsets : On essaie de récupérer la meilleure qualité dispo
+            if img.has_attr('srcset'):
+                try:
+                    # On prend le dernier élément de la liste (souvent le plus large)
+                    candidates = img['srcset'].split(',')
+                    url = candidates[-1].strip().split(' ')[0]
+                    if url.startswith('http'):
+                        img['src'] = url
+                except Exception:
+                    pass
+
+            # Nettoyage pour éviter les conflits
+            for attr in ['srcset', 'data-srcset', 'data-src', 'loading']:
+                if img.has_attr(attr):
+                    del img[attr]
+
+        return soup
+
+    feeds = [
+        ('À la une', 'https://www.lemonde.fr/rss/une.xml'),
+        ('Économie', 'https://www.lemonde.fr/economie/rss_full.xml'),
+        ('International', 'https://www.lemonde.fr/international/rss_full.xml'),
+        ('Planète', 'https://www.lemonde.fr/planete/rss_full.xml'),
+        ('M le Mag', 'https://www.lemonde.fr/m-le-mag/rss_full.xml')
+    ]
+
+
+calibre_most_common_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'

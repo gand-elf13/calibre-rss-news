@@ -96,6 +96,11 @@ class BrowserResponse:
     @property
     def url(self):
         return self._r.url
+    @property
+    def status_code(self):
+        return self._r.status_code
+    def raise_for_status(self):
+        self._r.raise_for_status()
     def info(self):
         return self
     def get(self, header, default=None):
@@ -120,7 +125,10 @@ class Browser:
             r = self._session.post(url, data=data, headers=headers, timeout=timeout)
         else:
             r = self._session.get(url, headers=headers, timeout=timeout)
-        r.raise_for_status()
+        # Do NOT call raise_for_status() here — recipes often wrap open() in
+        # try/except and need to inspect or handle non-200 responses themselves.
+        # Callers that require a clean response (e.g. fetcher.py) check status
+        # explicitly after calling open().
         self._current_url = r.url
         return BrowserResponse(r)
 
@@ -419,6 +427,12 @@ class BasicNewsRecipe:
         else:
             br = self.get_browser()
             resp = br.open(url_or_html)
+            # Raise here so recipes get a clear HTTPError they can catch —
+            # but only for hard failures (5xx). For 4xx the recipe's own
+            # try/except handles the logic (e.g. economist re-tries with
+            # a different UA on 403).
+            if resp.status_code >= 500:
+                resp.raise_for_status()
             raw_bytes = resp.read()
             enc = self.encoding or 'utf-8'
             html = raw_bytes.decode(enc, errors='replace')
