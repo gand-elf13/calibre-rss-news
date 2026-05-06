@@ -1,0 +1,177 @@
+# runner.py – execute a loaded recipe and collect article data
+
+import logging
+import concurrent.futures
+from datetime import datetime, timezone
+
+import feedparser
+import requests
+
+from fetcher import fetch_article
+from calibre_compat import AbortArticle
+
+logger = logging.getLogger("runner")
+
+DEFAULT_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _make_session(recipe):
+    """Return the requests.Session from the recipe's browser shim."""
+    br = recipe.get_browser()
+    # Our Browser shim has ._session; fall back to a plain session
+    session = getattr(br, '_session', None)
+    if session is None or not isinstance(session, requests.Session):
+        session = requests.Session()
+        session.headers['User-Agent'] = DEFAULT_UA
+    return session
+
+
+def _parse_feed_entry(entry):
+    """Extract a normalised article dict from a feedparser entry."""
+    url = entry.get('link', '')
+    title = entry.get('title', '(no title)')
+    description = ''
+    for key in ('summary', 'content', 'description'):
+        val = entry.get(key)
+        if val:
+            if isinstance(val, list):
+                val = val[0].get('value', '')
+            description = val
+            break
+
+    pub_date = entry.get('published') or entry.get('updated') or ''
+    author = ''
+    if entry.get('author'):
+        author = entry['author']
+    elif entry.get('author_detail', {}).get('name'):
+        author = entry['author_detail']['name']
+
+    return {
+        'title': title,
+        'url': url,
+        'description': description,
+        'pub_date': pub_date,
+        'author': author,
+        'content_html': None,
+    }
+
+
+def _feeds_from_recipe(recipe):
+    """
+    Return [(feed_title, [article_dict, ...]), ...]
+    Honours both get_feeds() and parse_index().
+    """
+    # parse_index() takes priority if overridden
+    pi = recipe.parse_index()
+    if pi is not None:
+        return pi  # recipe already returns [(title, [articles])]
+
+    raw_feeds = recipe.get_feeds()
+    if not raw_feeds:
+        return []
+
+    result = []
+    for feed_spec in raw_feeds:
+        if isinstance(feed_spec, (list, tuple)) and len(feed_spec) == 2:
+            feed_title, feed_url = feed_spec
+        else:
+            feed_url = str(feed_spec)
+            feed_title = ''
+
+        logger.info(f"Parsing feed: {feed_url}")
+        try:
+            parsed = feedparser.parse(feed_url, agent=DEFAULT_UA)
+        except Exception as e:
+            logger.warning(f"feedparser error on {feed_url}: {e}")
+            continue
+
+        if not feed_title:
+            feed_title = parsed.feed.get('title', feed_url)
+
+        articles = []
+        for entry in parsed.entries[:recipe.max_articles_per_feed]:
+            art = _parse_feed_entry(entry)
+            # honour oldest_article cutoff
+            if recipe._is_article_old(art['pub_date']):
+                logger.debug(f"Skipping old article: {art['title']}")
+                continue
+            # embedded content shortcut
+            if recipe.use_embedded_content is True or (
+                recipe.use_embedded_content is None
+                and art['description']
+                and len(art['description']) > 200
+            ):
+                art['content_html'] = art['description']
+            articles.append(art)
+
+        result.append((feed_title, articles))
+
+    return result
+
+
+def _fetch_one(art, recipe, session):
+    """Fetch and clean article content; returns article dict."""
+    url = recipe.get_article_url(
+        type('_FeedEntry', (), {'link': art['url'], 'get': lambda self, k, d='': art.get(k, d)})()
+    ) or art['url']
+
+    if not url:
+        return art
+
+    if art.get('content_html'):
+        return art  # already have embedded content
+
+    logger.info(f"  Fetching: {url}")
+    content_html, final_url = fetch_article(url, recipe, session=session)
+    if content_html:
+        art['content_html'] = content_html
+        art['url'] = final_url
+    return art
+
+
+def run_recipe(recipe, max_workers=None):
+    """
+    Execute the recipe.
+    Returns list of article dicts:
+        {title, url, content_html, pub_date, author, description, feed_title}
+    """
+    workers = max_workers or min(recipe.simultaneous_downloads, 8)
+    session = _make_session(recipe)
+
+    feeds_data = _feeds_from_recipe(recipe)
+    all_articles = []
+
+    for feed_title, articles in feeds_data:
+        if not articles and recipe.remove_empty_feeds:
+            continue
+
+        to_fetch = []
+        for art in articles:
+            art['feed_title'] = feed_title
+            if not art.get('content_html'):
+                to_fetch.append(art)
+            else:
+                all_articles.append(art)
+
+        if to_fetch:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {
+                    ex.submit(_fetch_one, art, recipe, session): art
+                    for art in to_fetch
+                }
+                for fut in concurrent.futures.as_completed(futures):
+                    try:
+                        result = fut.result()
+                        all_articles.append(result)
+                    except AbortArticle:
+                        pass
+                    except Exception as e:
+                        orig = futures[fut]
+                        logger.warning(f"Error processing {orig.get('url', '?')}: {e}")
+                        all_articles.append(orig)  # include with no content
+
+    recipe.cleanup()
+    return all_articles
