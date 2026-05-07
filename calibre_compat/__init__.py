@@ -60,7 +60,15 @@ class CalibreLog:
     def debug(self, *args):
         logger.debug(" ".join(str(a) for a in args))
     def exception(self, *args):
-        logger.exception(" ".join(str(a) for a in args))
+        import traceback, sys
+        msg = " ".join(str(a) for a in args)
+        exc = sys.exc_info()
+        if exc[0] is not None:
+            # Called from inside an except block — show full traceback
+            tb = "".join(traceback.format_exception(*exc))
+            logger.error(f"{msg}\n{tb}")
+        else:
+            logger.error(msg)
 
 # ---------------------------------------------------------------------------
 # User-agent helpers
@@ -144,6 +152,10 @@ class Browser:
         return BrowserResponse(requests.Response())
 
     def set_simple_cookie(self, name, value, domain='', path='/'):
+        self._session.cookies.set(name, value, domain=domain, path=path)
+
+    def set_cookie(self, name, value, domain='', path='/'):
+        """mechanize alias for set_simple_cookie."""
         self._session.cookies.set(name, value, domain=domain, path=path)
     def addheaders(self, headers):
         for k, v in headers:
@@ -260,6 +272,10 @@ as_unicode = force_unicode
 class AbortArticle(Exception):
     pass
 
+class NoArticles(Exception):
+    """Raised by recipes when no articles are found (e.g. paywall/network)."""
+    pass
+
 # ---------------------------------------------------------------------------
 # classes() / prefixed_classes() helpers
 # ---------------------------------------------------------------------------
@@ -287,9 +303,11 @@ def classes(*args):
     return {'attrs': {'class': check}}
 
 
-def prefixed_classes(*args):
-    """Match tags whose class attribute starts with any of the given prefixes."""
-    prefixes = tuple(args)
+def prefixed_classes(classes_str):
+    """Match tags whose class starts with any prefix in the space-separated string.
+    Mirrors real calibre: prefixed_classes('Foo__ Bar__') matches class='Foo__xyz'.
+    """
+    prefixes = tuple(classes_str.split())
 
     def check(x):
         if not x:
@@ -371,6 +389,10 @@ class BasicNewsRecipe:
     @property
     def browser(self):
         return self.get_browser()
+
+    @browser.setter
+    def browser(self, br):
+        self._br = br
 
     # ---- feed list ----
 
@@ -642,10 +664,12 @@ def install():
     news.BasicNewsRecipe  = BasicNewsRecipe
     news.classes          = classes
     news.prefixed_classes = prefixed_classes
+    news.NoArticles       = NoArticles
     ra = _stub('calibre.web.feeds.recipes')
     ra.BasicNewsRecipe  = BasicNewsRecipe
     ra.classes          = classes
     ra.prefixed_classes = prefixed_classes
+    ra.NoArticles       = NoArticles
 
     # calibre.ebooks.*
     _stub('calibre.ebooks')
@@ -705,8 +729,9 @@ def install():
     img.image_from_data = lambda *a, **kw: None
 
     iso = _stub('calibre.utils.iso8601')
-    iso.local_tz = local_tz
-    iso.utc_tz   = utc_tz
+    iso.local_tz      = local_tz
+    iso.utc_tz        = utc_tz
+    iso.parse_iso8601 = parse_date   # alias — same semantics
 
     _stub('calibre.utils.formatter_functions')
     _stub('calibre.utils.config')

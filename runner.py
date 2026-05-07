@@ -65,8 +65,47 @@ def _feeds_from_recipe(recipe):
     Honours both get_feeds() and parse_index().
     """
     # parse_index() takes priority if overridden
-    pi = recipe.parse_index()
+    # Wrap recipe.log so all internal self.log() calls surface at DEBUG level
+    orig_log = recipe.log
+    class TracingLog(type(orig_log)):
+        def __call__(self, *args):
+            logger.debug("  [recipe.log] " + " ".join(str(a) for a in args))
+        def info(self, *args):
+            logger.debug("  [recipe.log] " + " ".join(str(a) for a in args))
+        def warn(self, *args):
+            logger.warning("  [recipe.log.warn] " + " ".join(str(a) for a in args))
+        def warning(self, *args):
+            logger.warning("  [recipe.log.warn] " + " ".join(str(a) for a in args))
+        def error(self, *args):
+            logger.error("  [recipe.log.error] " + " ".join(str(a) for a in args))
+        def debug(self, *args):
+            logger.debug("  [recipe.log.debug] " + " ".join(str(a) for a in args))
+        def exception(self, *args):
+            import traceback, sys
+            msg = " ".join(str(a) for a in args)
+            exc = sys.exc_info()
+            if exc[0] is not None:
+                tb = "".join(traceback.format_exception(*exc))
+                logger.error(f"  [recipe.log.exception] {msg}\n{tb}")
+            else:
+                logger.error(f"  [recipe.log.exception] {msg}")
+    recipe.log = TracingLog()
+    try:
+        pi = recipe.parse_index()
+    except Exception as e:
+        # NoArticles (and similar recipe-defined sentinels) mean the recipe
+        # ran successfully but found nothing — treat as empty, not a crash.
+        from calibre_compat import NoArticles
+        if isinstance(e, NoArticles) or type(e).__name__ == 'NoArticles':
+            logger.warning(f"Recipe reported no articles: {e}")
+            return []
+        raise
     if pi is not None:
+        if not pi:
+            logger.debug("parse_index() returned empty list — recipe found no sections/articles")
+        else:
+            total = sum(len(arts) for _, arts in pi)
+            logger.debug(f"parse_index() returned {len(pi)} feed(s), {total} article(s)")
         return pi  # recipe already returns [(title, [articles])]
 
     raw_feeds = recipe.get_feeds()
@@ -159,17 +198,21 @@ def run_recipe(recipe, max_workers=None):
         if to_fetch:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = {
-                    ex.submit(_fetch_one, art, recipe, session): art
+                    ex.submit(_fetch_one, art, recipe, None): art
                     for art in to_fetch
                 }
-                for fut in concurrent.futures.as_completed(futures):
+                ARTICLE_TIMEOUT = 60  # seconds per article before giving up
+                for fut in concurrent.futures.as_completed(futures, timeout=None):
+                    orig = futures[fut]
                     try:
-                        result = fut.result()
+                        result = fut.result(timeout=ARTICLE_TIMEOUT)
                         all_articles.append(result)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"Timed out fetching {orig.get('url', '?')}, skipping")
+                        all_articles.append(orig)
                     except AbortArticle:
                         pass
                     except Exception as e:
-                        orig = futures[fut]
                         logger.warning(f"Error processing {orig.get('url', '?')}: {e}")
                         all_articles.append(orig)  # include with no content
 

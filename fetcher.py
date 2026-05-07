@@ -20,13 +20,13 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-TIMEOUT = 20
+TIMEOUT = (15, 30)  # (connect_timeout, read_timeout) in seconds
 
 
 def _get(url, session=None, encoding=None):
     s = session or requests.Session()
     s.headers.setdefault("User-Agent", DEFAULT_UA)
-    r = s.get(url, timeout=TIMEOUT, allow_redirects=True)
+    r = s.get(url, timeout=TIMEOUT, allow_redirects=True, stream=False)
     r.raise_for_status()
     if encoding:
         r.encoding = encoding
@@ -186,6 +186,12 @@ def fetch_article(url, recipe, session=None):
     try:
         # Allow recipe to rewrite URL (e.g. print version)
         url = recipe.print_version(url) or url
+
+        # Use the recipe's own browser session so UA, cookies and headers
+        # set in get_browser() apply to article fetches too.
+        if session is None:
+            br = recipe.get_browser()
+            session = getattr(br, '_session', None)
 
         raw_html, final_url = _get(url, session=session, encoding=recipe.encoding)
 
