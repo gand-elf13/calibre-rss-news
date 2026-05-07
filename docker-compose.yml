@@ -1,0 +1,13 @@
+services:
+  calibre-rss:
+    build: .
+    container_name: calibre-rss
+    restart: unless-stopped
+    volumes:
+      - ./recipes:/app/recipes:ro
+      - ./feeds:/app/feeds
+      - ./cookies:/app/cookies:ro
+    environment:
+      - TZ=UTC
+      - RUN_INTERVAL=3600
+    command: ["/app/recipes"]
