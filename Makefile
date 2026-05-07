@@ -1,6 +1,6 @@
 IMAGE   ?= calibre-rss
-REGISTRY ?= ghcr.io
-OWNER   ?= $(or $(GITHUB_REPOSITORY_OWNER),REPO_OWNER)
+REGISTRY ?= codeberg.org
+OWNER   ?= gand_elf
 TAG     ?= latest
 
 # ── Local development ──────────────────────────────────────────────────────────
@@ -8,20 +8,6 @@ TAG     ?= latest
 .PHONY: install
 install:
 	pip install -r requirements.txt
-
-.PHONY: install-dev
-install-dev:
-	pip install ruff 2>/dev/null || pip install --break-system-packages ruff 2>/dev/null || echo "Install ruff manually: pipx install ruff"
-
-.PHONY: lint
-lint:
-	ruff check .
-	ruff format --check .
-
-.PHONY: fmt
-fmt:
-	ruff check --fix .
-	ruff format .
 
 .PHONY: test
 test:
@@ -42,7 +28,7 @@ run:
 
 .PHONY: clean
 clean:
-	rm -rf feeds/*.xml __pycache__ .ruff_cache
+	rm -rf feeds/*.xml __pycache__
 
 # ── Docker ─────────────────────────────────────────────────────────────────────
 

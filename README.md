@@ -206,36 +206,9 @@ location /feeds/ {
 
 ## Contributing
 
-### Prerequisites
-
-- Python 3.10+
-- `pip install -r requirements.txt`
-
-### Development
-
-```bash
-# Lint
-make lint
-
-# Build Docker image locally
-make docker-build
-
-# Test with a single recipe (fast mode)
-python calibre_rss.py --test recipes/hacker_news.recipe
-```
-
-### Code style
-
-- Uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting
-- No trailing whitespace, UTF-8 encoding
-- Follow existing patterns in the codebase
-
-### Pull requests
-
 1. Fork the repository
 2. Create a feature branch
-3. Run `make lint` before committing
-4. Open a PR against the `main` branch
+3. Open a PR against the `main` branch
 
 ---
 
