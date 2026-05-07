@@ -1,5 +1,11 @@
 # calibre-rss
 
+## AI Disclaimer
+
+This project was built with heavy use of AI. I don't have time nor the qualification, so AI allows me to build the tools that i need quickly.
+I am open to any contributions.
+
+## TL-DR
 
 Run Calibre `.recipe` files **without Calibre installed** and output standard
 **Atom RSS feeds** (`.xml`) that any feed reader can consume.
