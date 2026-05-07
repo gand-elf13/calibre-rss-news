@@ -245,11 +245,23 @@ def fetch_article(url, recipe, session=None):
         if recipe.preprocess_regexps:
             raw_html = _apply_preprocess_regexps(raw_html, recipe.preprocess_regexps)
 
-        # preprocess_raw_html hook
+        # preprocess_raw_html hook — this is where recipes like economist
+        # convert JSON/API responses into HTML. Must NOT be silently swallowed.
         try:
-            raw_html = recipe.preprocess_raw_html(raw_html, final_url)
-        except Exception:
-            pass
+            result = recipe.preprocess_raw_html(raw_html, final_url)
+            if result is not None:
+                # Recipes may return an lxml element (via etree.tostring) or a string
+                if not isinstance(result, str):
+                    try:
+                        from lxml import etree
+                        result = etree.tostring(result, encoding='unicode',
+                                                method='html')
+                    except Exception:
+                        result = str(result)
+                raw_html = result
+        except Exception as e:
+            logger.warning(f"preprocess_raw_html failed for {final_url}: {e}")
+            import traceback; logger.debug(traceback.format_exc())
 
         # auto_cleanup via readability
         if recipe.auto_cleanup:

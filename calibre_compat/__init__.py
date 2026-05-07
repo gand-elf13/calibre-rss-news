@@ -700,13 +700,27 @@ def _build_html5_parser_shim():
     h5 = types.ModuleType('html5_parser')
 
     def parse(html, treebuilder='lxml', namespaceHTMLElements=False, **kw):
+        """
+        Substitute for html5_parser.parse() using lxml.
+        The economist recipe calls this as:
+          root = parse(raw)   → then root.xpath('//script[@id="__NEXT_DATA__"]')
+          root = parse(html)  → then etree.tostring(root, encoding='unicode')
+        Must return an lxml _Element, not an ElementTree.
+        """
+        from lxml import etree
+        from lxml.html import fromstring as html_fromstring
         try:
-            from lxml.html import fromstring
             if isinstance(html, str):
                 html = html.encode('utf-8')
-            return fromstring(html)
+            # html_fromstring returns an HtmlElement (subclass of _Element)
+            # which supports both .xpath() and etree.tostring()
+            return html_fromstring(html)
         except Exception:
-            return None
+            try:
+                # Fallback: parse as generic XML
+                return etree.fromstring(html)
+            except Exception:
+                return etree.Element('html')
 
     h5.parse = parse
     sys.modules['html5_parser'] = h5
