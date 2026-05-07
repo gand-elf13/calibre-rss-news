@@ -35,7 +35,12 @@ def _do_get(url, session, encoding):
     # Handle file:/// URLs written by recipes like economist (print_version temp files)
     if url.startswith('file:///') or url.startswith('file://'):
         import urllib.request, urllib.parse
-        local_path = urllib.request.url2pathname(urllib.parse.urlparse(url).path)
+        path = urllib.parse.urlparse(url).path
+        # Python 3.14+ url2pathname rejects paths starting with //
+        # (urlparse('file:////tmp/foo').path → '//tmp/foo')
+        if path.startswith('//'):
+            path = path[1:]
+        local_path = urllib.request.url2pathname(path)
         with open(local_path, 'rb') as f:
             raw = f.read()
         enc = encoding or 'utf-8'
