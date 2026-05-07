@@ -1,7 +1,5 @@
 # calibre-rss
 
-[![status](https://ci.codeberg.org/api/badges/REPO_OWNER/calibre-rss/status.svg)](https://ci.codeberg.org/REPO_OWNER/calibre-rss)
-[![Docker](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcodeberg.org%2Fapi%2Fv1%2Fpackages%2FREPO_OWNER%2Fcalibre-rss&query=%24.packages%5B%3F%40.type%3D%3D%27container%27%5D.version&style=flat&logo=docker&label=image&color=2496ED)](https://codeberg.org/REPO_OWNER/calibre-rss/-/packages/container/calibre-rss/latest)
 
 Run Calibre `.recipe` files **without Calibre installed** and output standard
 **Atom RSS feeds** (`.xml`) that any feed reader can consume.
@@ -28,7 +26,7 @@ python calibre_rss.py recipes/
 docker run --rm \
   -v ./recipes:/app/recipes:ro \
   -v ./feeds:/app/feeds \
-  ghcr.io/REPO_OWNER/calibre-rss
+  codeberg.org/gand_elf/calibre-rss
 
 # Docker (scheduled — runs every hour)
 docker compose up -d
@@ -40,10 +38,10 @@ docker compose up -d
 
 ### Pre-built image
 
-Pull from [GitHub Container Registry](https://ghcr.io):
+Pull from [Codeberg Container Registry](https://codeberg.org/gand_elf/calibre-rss/-/packages):
 
 ```bash
-docker pull ghcr.io/REPO_OWNER/calibre-rss:latest
+docker pull codeberg.org/gand_elf/calibre-rss:latest
 ```
 
 ### Build locally
