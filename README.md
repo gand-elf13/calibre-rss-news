@@ -56,105 +56,16 @@ calibre-rss/
 ├── recipes/                # ← put your .recipe files here
 │   ├── hacker_news.recipe
 │   └── lobsters.recipe
-└── feeds/                  # ← generated .xml feeds end up here (git-ignore this)
+└── feeds/                  # ← generated .xml feeds end up here
 ```
 
 ---
 
-## Supported recipe features
-
-| Feature | Supported |
-|---|---|
-| `feeds = [(title, url), ...]` | ✅ |
-| `get_feeds()` override | ✅ |
-| `parse_index()` override | ✅ |
-| `oldest_article` cutoff | ✅ |
-| `max_articles_per_feed` | ✅ |
-| `keep_only_tags` | ✅ |
-| `remove_tags` | ✅ |
-| `remove_tags_before` / `_after` | ✅ |
-| `preprocess_regexps` | ✅ |
-| `preprocess_html(soup)` hook | ✅ |
-| `postprocess_html(soup)` hook | ✅ |
-| `preprocess_raw_html(html, url)` | ✅ |
-| `print_version(url)` | ✅ |
-| `get_article_url(article)` | ✅ |
-| `auto_cleanup` (readability) | ✅ |
-| `use_embedded_content` | ✅ |
-| `no_stylesheets` | ✅ |
-| `remove_javascript` | ✅ |
-| `classes()` helper | ✅ |
-| `index_to_soup(url)` | ✅ |
-| `tag_to_string(tag)` | ✅ |
-| `Browser` / `get_browser()` | ✅ stub |
-| `needs_subscription` login | ⚠️ basic stub |
-| Simultaneous downloads | ✅ ThreadPoolExecutor |
-| Kindle masthead / cover | ➖ ignored |
-
----
-
-## Writing your own recipes
+## Recipes
 
 Calibre recipes are plain Python files (`.recipe` extension = `.py`). Any
 recipe from [Calibre's built-in collection][recipes] works directly — just
 drop the file into your `recipes/` folder.
-
-**Minimal recipe:**
-```python
-from calibre.web.feeds.news import BasicNewsRecipe
-
-class MySource(BasicNewsRecipe):
-    title          = 'My News Source'
-    oldest_article = 3          # days
-    max_articles_per_feed = 20
-    auto_cleanup   = True       # readability-based extraction
-    language       = 'en'
-
-    feeds = [
-        ('Section A', 'https://example.com/feed/section-a.rss'),
-        ('Section B', 'https://example.com/feed/section-b.rss'),
-    ]
-```
-
-**With fine-grained HTML cleaning:**
-```python
-from calibre.web.feeds.news import BasicNewsRecipe, classes
-
-class MySource(BasicNewsRecipe):
-    title = 'My Source'
-    oldest_article = 7
-    max_articles_per_feed = 15
-
-    keep_only_tags = [
-        classes('article-content', 'post-body'),
-        dict(name='article'),
-    ]
-    remove_tags = [
-        dict(name='div', attrs={'class': ['ad', 'related', 'sidebar']}),
-        dict(name='aside'),
-    ]
-
-    feeds = [('Main', 'https://example.com/rss')]
-```
-
-**With custom article list (no RSS feed):**
-```python
-from calibre.web.feeds.news import BasicNewsRecipe
-
-class MySource(BasicNewsRecipe):
-    title = 'My Source'
-
-    def parse_index(self):
-        soup = self.index_to_soup('https://example.com/archive')
-        articles = []
-        for a in soup.select('h2.headline a'):
-            articles.append({
-                'title': self.tag_to_string(a),
-                'url':   a['href'],
-                'date':  '',
-            })
-        return [('All articles', articles)]
-```
 
 ---
 
