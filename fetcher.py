@@ -4,7 +4,13 @@ import re
 import logging
 from urllib.parse import urljoin
 
-import requests
+try:
+    from curl_cffi import requests
+    _IMPERSONATE = "chrome124"
+except ImportError:
+    import requests
+    _IMPERSONATE = None
+
 from bs4 import BeautifulSoup
 
 try:
@@ -21,19 +27,59 @@ DEFAULT_UA = (
 )
 
 TIMEOUT = (15, 30)  # (connect_timeout, read_timeout) in seconds
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB cap per article
+
+
+def _do_get(url, session, encoding):
+    """Inner fetch — runs in a thread so we can enforce a hard wall-clock timeout."""
+    # Handle file:/// URLs written by recipes like economist (print_version temp files)
+    if url.startswith('file:///') or url.startswith('file://'):
+        import urllib.request, urllib.parse
+        local_path = urllib.request.url2pathname(urllib.parse.urlparse(url).path)
+        with open(local_path, 'rb') as f:
+            raw = f.read()
+        enc = encoding or 'utf-8'
+        return raw.decode(enc, errors='replace'), url
+    if session is not None:
+        s = session
+    elif _IMPERSONATE:
+        from curl_cffi.requests import Session as _S
+        s = _S(impersonate=_IMPERSONATE)
+        s.headers['User-Agent'] = DEFAULT_UA
+    else:
+        s = requests.Session()
+        s.headers['User-Agent'] = DEFAULT_UA
+    r = s.get(url, timeout=TIMEOUT, allow_redirects=True, stream=True)
+    r.raise_for_status()
+    chunks = []
+    size = 0
+    for chunk in r.iter_content(chunk_size=65536):
+        if chunk:
+            chunks.append(chunk)
+            size += len(chunk)
+            if size >= MAX_RESPONSE_BYTES:
+                logger.warning(f"Response truncated at {MAX_RESPONSE_BYTES // 1024}KB: {url}")
+                break
+    raw_bytes = b"".join(chunks)
+    if encoding:
+        enc = encoding
+    elif r.encoding and r.encoding.lower() not in ('iso-8859-1', 'latin-1'):
+        enc = r.encoding
+    else:
+        enc = r.apparent_encoding or 'utf-8'
+    return raw_bytes.decode(enc, errors='replace'), r.url
 
 
 def _get(url, session=None, encoding=None):
-    s = session or requests.Session()
-    s.headers.setdefault("User-Agent", DEFAULT_UA)
-    r = s.get(url, timeout=TIMEOUT, allow_redirects=True, stream=False)
-    r.raise_for_status()
-    if encoding:
-        r.encoding = encoding
-    elif r.encoding and r.encoding.lower() in ('iso-8859-1', 'latin-1'):
-        # requests often guesses wrong; trust chardet / apparent_encoding
-        r.encoding = r.apparent_encoding
-    return r.text, r.url  # (html, final_url)
+    """Fetch with a hard wall-clock timeout enforced via a thread."""
+    import concurrent.futures as _cf
+    HARD_TIMEOUT = 45  # seconds total per article fetch
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_do_get, url, session, encoding)
+        try:
+            return fut.result(timeout=HARD_TIMEOUT)
+        except _cf.TimeoutError:
+            raise TimeoutError(f"Hard timeout ({HARD_TIMEOUT}s) fetching {url}")
 
 
 def _tag_matches(tag, spec):

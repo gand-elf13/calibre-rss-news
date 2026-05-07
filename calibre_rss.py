@@ -67,7 +67,7 @@ def sanitize_filename(name):
     return "".join(c if c.isalnum() or c in '-_.' else '_' for c in name)
 
 
-def run_one_recipe(recipe_path, output_dir, jobs, no_content, test_mode):
+def run_one_recipe(recipe_path, output_dir, jobs, no_content, test_mode, cookies_file=None):
     logger = logging.getLogger("calibre-rss")
     logger.info(f"Processing: {recipe_path}")
 
@@ -90,6 +90,36 @@ def run_one_recipe(recipe_path, output_dir, jobs, no_content, test_mode):
         recipe.auto_cleanup    = False
 
     logger.info(f"  Recipe: {recipe.title!r} (oldest_article={recipe.oldest_article}d)")
+
+    # Load cookies if provided (Netscape/Mozilla cookie file format)
+    # Also auto-detect cookies/<recipe_stem>.txt alongside the recipe
+    cookie_paths = []
+    if cookies_file:
+        cookie_paths.append(cookies_file)
+    auto_cookie = os.path.join(
+        os.path.dirname(os.path.abspath(recipe_path)),
+        'cookies',
+        os.path.splitext(os.path.basename(recipe_path))[0] + '.txt'
+    )
+    if os.path.exists(auto_cookie) and auto_cookie not in cookie_paths:
+        cookie_paths.append(auto_cookie)
+        logger.info(f"  Auto-loading cookies: {auto_cookie}")
+
+    if cookie_paths:
+        import http.cookiejar
+        br = recipe.get_browser()
+        for cp in cookie_paths:
+            cj = http.cookiejar.MozillaCookieJar()
+            try:
+                cj.load(cp, ignore_discard=True, ignore_expires=True)
+                for cookie in cj:
+                    br._session.cookies.set(
+                        cookie.name, cookie.value,
+                        domain=cookie.domain, path=cookie.path
+                    )
+                logger.info(f"  Loaded {sum(1 for _ in cj)} cookies from {cp}")
+            except Exception as e:
+                logger.warning(f"  Failed to load cookies from {cp}: {e}")
 
     try:
         articles = run_recipe(recipe, max_workers=jobs)
@@ -142,6 +172,10 @@ def main():
                         help='Test mode: only 1 feed / 2 articles per recipe')
     parser.add_argument('--list', action='store_true',
                         help='List recipes without running them')
+    parser.add_argument('--cookies', metavar='FILE',
+                        help='Netscape cookie file to inject into all recipes. '
+                             'Per-recipe cookies are also auto-loaded from '
+                             'cookies/<recipe_name>.txt next to the recipe file.')
     args = parser.parse_args()
 
     setup_logging(verbose=args.verbose, quiet=args.quiet)
@@ -165,6 +199,7 @@ def main():
             jobs=args.jobs,
             no_content=args.no_content,
             test_mode=args.test,
+            cookies_file=getattr(args, 'cookies', None),
         )
         if success:
             ok += 1

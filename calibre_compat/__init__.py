@@ -30,7 +30,15 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin
 from functools import lru_cache
 
-import requests
+try:
+    from curl_cffi import requests
+    from curl_cffi.requests import Session as _Session
+    _IMPERSONATE = "chrome124"
+except ImportError:
+    import requests
+    _Session = requests.Session
+    _IMPERSONATE = None
+
 from bs4 import BeautifulSoup, NavigableString, Tag, CData
 
 logger = logging.getLogger("calibre_compat")
@@ -79,11 +87,81 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# Calibre's word-based UA: two random common English words joined by '/'
+# e.g. "investor/theme", "decide/age" — used to avoid bot detection
+_COMMON_WORDS = (
+    'ability','able','accept','account','across','action','activity','address',
+    'administration','adult','affect','agency','agent','agree','agreement','air',
+    'allow','amount','analysis','animal','answer','approach','area','argue','arm',
+    'article','artist','assume','attack','attention','attorney','audience','author',
+    'avoid','baby','bank','base','beat','behavior','believe','benefit','bill',
+    'billion','blood','board','body','book','born','break','bring','brother',
+    'budget','build','business','camera','campaign','candidate','capital','career',
+    'carry','cause','cell','center','chance','change','character','charge','child',
+    'choice','church','citizen','city','civil','claim','clear','coach','collection',
+    'college','color','common','community','company','concern','condition',
+    'conference','consider','consumer','continue','control','cost','country',
+    'couple','course','court','cover','create','crime','culture','current',
+    'customer','dark','daughter','dead','deal','death','debate','decade','decide',
+    'decision','deep','defense','degree','describe','design','detail','determine',
+    'develop','development','difference','dinner','direction','discover','discuss',
+    'disease','doctor','draw','dream','drive','drop','drug','early','east',
+    'economic','economy','edge','education','effect','effort','election','employee',
+    'energy','enjoy','enter','environment','establish','evening','event','evidence',
+    'example','executive','exist','expect','experience','explain','factor','fail',
+    'fall','family','fear','federal','feeling','field','financial','fine','firm',
+    'floor','focus','follow','force','foreign','forget','forward','free','friend',
+    'front','fund','future','garden','glass','goal','government','green','ground',
+    'group','grow','growth','guess','gun','hand','happen','health','heart','heavy',
+    'history','hold','home','hope','hospital','house','human','identify','image',
+    'imagine','impact','improve','include','increase','industry','information',
+    'interest','international','interview','invest','investor','issue','join',
+    'kill','land','laugh','lead','learn','leave','legal','level','light','likely',
+    'listen','local','lose','love','machine','magazine','maintain','major',
+    'majority','manage','material','media','medical','meeting','member','memory',
+    'mention','message','military','million','mind','minute','miss','model',
+    'morning','mother','move','music','nation','national','natural','nature',
+    'network','news','night','notice','occur','offer','office','option','order',
+    'organization','owner','parent','partner','party','patient','peace','perform',
+    'period','phone','picture','piece','plant','point','police','policy','position',
+    'power','practice','prepare','present','price','private','problem','process',
+    'produce','product','program','project','property','provide','purpose',
+    'quality','quickly','race','rate','reach','reason','recent','reduce','reflect',
+    'relate','remain','report','represent','require','research','resource','respond',
+    'result','return','reveal','risk','role','rule','scene','school','season',
+    'sense','serve','service','share','shoot','short','sign','situation','skill',
+    'social','society','soldier','sort','sound','south','space','speak','special',
+    'specific','spend','staff','stage','stand','state','stay','strategy','street',
+    'structure','student','study','style','subject','success','summer','support',
+    'surface','system','teacher','team','technology','television','tend','term',
+    'theory','thought','thousand','threat','together','total','tough','trade',
+    'treat','trial','trouble','type','understand','unit','value','view','voice',
+    'vote','watch','water','week','west','wind','woman','wonder','work','world',
+    'worry','write','year',
+)
+
 def common_english_word_ua():
-    return DEFAULT_UA
+    """Mimic calibre's word-based UA: 'word/word' e.g. 'investor/theme'."""
+    import random
+    return '{}/{}'.format(random.choice(_COMMON_WORDS), random.choice(_COMMON_WORDS))
 
 def random_common_chrome_user_agent():
-    return DEFAULT_UA
+    """Return a varied Chrome UA, matching calibre's random chrome UA pool."""
+    import random
+    versions = [
+        'Chrome/120.0.0.0', 'Chrome/121.0.0.0', 'Chrome/122.0.0.0',
+        'Chrome/123.0.0.0', 'Chrome/124.0.0.0', 'Chrome/125.0.0.0',
+        'Chrome/134.0.0.0', 'Chrome/135.0.0.0',
+    ]
+    platforms = [
+        ('Windows NT 10.0; Win64; x64', 'Windows NT 10.0; Win64; x64'),
+        ('X11; Linux x86_64', 'X11; Linux x86_64'),
+        ('Macintosh; Intel Mac OS X 10_15_7', 'Macintosh; Intel Mac OS X 10_15_7'),
+    ]
+    plat_ua, _ = random.choice(platforms)
+    ver = random.choice(versions)
+    return (f'Mozilla/5.0 ({plat_ua}) AppleWebKit/537.36 '
+            f'(KHTML, like Gecko) {ver} Safari/537.36')
 
 def random_user_agent(allow_ie=False):
     return DEFAULT_UA
@@ -116,10 +194,13 @@ class BrowserResponse:
 
 
 class Browser:
-    """Minimal mechanize-like browser backed by requests.Session."""
+    """Minimal mechanize-like browser backed by curl_cffi (TLS-impersonating) or requests."""
 
     def __init__(self, user_agent=DEFAULT_UA, **kwargs):
-        self._session = requests.Session()
+        if _IMPERSONATE:
+            self._session = _Session(impersonate=_IMPERSONATE)
+        else:
+            self._session = _Session()
         self._session.headers['User-Agent'] = user_agent
         self._current_url = None
 
@@ -166,7 +247,7 @@ class Browser:
         return self._session.cookies
 
     def clone_browser(self):
-        b = Browser()
+        b = Browser(user_agent=self._session.headers.get('User-Agent', DEFAULT_UA))
         b._session.cookies.update(self._session.cookies)
         b._session.headers.update(self._session.headers)
         return b
@@ -376,9 +457,12 @@ class BasicNewsRecipe:
     # ---- browser ----
 
     def get_browser(self, *args, **kwargs):
-        if self._br is None:
-            ua = kwargs.pop('user_agent', DEFAULT_UA)
-            self._br = Browser(user_agent=ua)
+        ua = kwargs.pop('user_agent', None)
+        if self._br is None or ua is not None:
+            # Create a new browser (or replace it) when a specific UA is requested.
+            # This matches calibre behaviour: the economist recipe calls
+            # get_browser(user_agent=X) on retry to force a new UA.
+            self._br = Browser(user_agent=ua or DEFAULT_UA)
         return self._br
 
     get_browser.is_base_class_implementation = True
