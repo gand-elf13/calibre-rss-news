@@ -22,7 +22,7 @@ jobs:
       - name: Login to Codeberg Container Registry
         run: |
           buildah login -u "${{ github.repository_owner }}" \
-            -p "${{ secrets.GITHUB_TOKEN }}" \
+            -p "${{ secrets.FORGEJO_TOKEN }}" \
             codeberg.org
 
       - name: Build and tag
