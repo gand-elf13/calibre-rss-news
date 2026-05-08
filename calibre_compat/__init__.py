@@ -540,8 +540,19 @@ class BasicNewsRecipe:
             if resp.status_code >= 500:
                 resp.raise_for_status()
             raw_bytes = resp.read()
-            enc = self.encoding or 'utf-8'
-            html = raw_bytes.decode(enc, errors='replace')
+            # Robust UTF-8 decoding: try UTF-8 first, then fallback to legacy encodings
+            if isinstance(raw_bytes, str):
+                html = raw_bytes
+            else:
+                try:
+                    html = raw_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Fallback to recipe's encoding or Windows-1252
+                    enc = self.encoding or 'utf-8'
+                    try:
+                        html = raw_bytes.decode(enc)
+                    except (UnicodeDecodeError, LookupError):
+                        html = raw_bytes.decode('windows-1252', errors='replace')
         if raw:
             return html
         return BeautifulSoup(html, 'lxml')

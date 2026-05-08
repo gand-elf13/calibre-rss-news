@@ -30,6 +30,38 @@ TIMEOUT = (15, 30)  # (connect_timeout, read_timeout) in seconds
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB cap per article
 
 
+def _decode_response(raw_bytes, encoding=None):
+    """
+    Robustly decode HTTP response bytes to text.
+    Tries UTF-8 first (which is the modern standard), then falls back
+    to the specified encoding or common legacy encodings.
+    """
+    if isinstance(raw_bytes, str):
+        return raw_bytes
+
+    # First try UTF-8 (most common for modern APIs)
+    try:
+        return raw_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        pass
+
+    # If encoding is explicitly specified and it's a known legacy encoding, try it
+    if encoding and encoding.lower() not in ('utf-8', 'utf8'):
+        try:
+            return raw_bytes.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            pass
+
+    # Try Windows-1252 (common fallback for Western European text)
+    try:
+        return raw_bytes.decode('windows-1252')
+    except UnicodeDecodeError:
+        pass
+
+    # Last resort: decode with replacement characters
+    return raw_bytes.decode('utf-8', errors='replace')
+
+
 def _do_get(url, session, encoding):
     """Inner fetch — runs in a thread so we can enforce a hard wall-clock timeout."""
     # Handle file:/// URLs written by recipes like economist (print_version temp files)
@@ -43,8 +75,7 @@ def _do_get(url, session, encoding):
         local_path = urllib.request.url2pathname(path)
         with open(local_path, 'rb') as f:
             raw = f.read()
-        enc = encoding or 'utf-8'
-        return raw.decode(enc, errors='replace'), url
+        return _decode_response(raw, encoding), url
     if session is not None:
         s = session
     elif _IMPERSONATE:
@@ -66,13 +97,8 @@ def _do_get(url, session, encoding):
                 logger.warning(f"Response truncated at {MAX_RESPONSE_BYTES // 1024}KB: {url}")
                 break
     raw_bytes = b"".join(chunks)
-    if encoding:
-        enc = encoding
-    elif r.encoding and r.encoding.lower() not in ('iso-8859-1', 'latin-1', 'windows-1252', 'cp1252'):
-        enc = r.encoding
-    else:
-        enc = r.apparent_encoding or 'utf-8'
-    return raw_bytes.decode(enc, errors='replace'), r.url
+    # Use robust decoding: prefer UTF-8, then fallback to specified encoding
+    return _decode_response(raw_bytes, encoding or r.apparent_encoding), r.url
 
 
 def _get(url, session=None, encoding=None):
