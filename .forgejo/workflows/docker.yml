@@ -8,6 +8,9 @@ on:
 jobs:
   build-and-push:
     runs-on: codeberg-small
+    env:
+      STORAGE_DRIVER: vfs
+      BUILDAH_ISOLATION: chroot
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +30,9 @@ jobs:
           REGISTRY="codeberg.org/${{ github.repository }}"
           VERSION="${GITHUB_REF_NAME#v}"
           MAJOR_MINOR="${VERSION%.*}"
-          buildah build -t "${REGISTRY}:${VERSION}" .
+          buildah --storage-driver="$STORAGE_DRIVER" \
+            bud --isolation="$BUILDAH_ISOLATION" \
+            -t "${REGISTRY}:${VERSION}" .
           buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:${MAJOR_MINOR}"
           buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:latest"
 
