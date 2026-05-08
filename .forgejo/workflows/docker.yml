@@ -11,29 +11,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Install buildah
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq buildah ca-certificates
 
       - name: Login to Codeberg Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: codeberg.org
-          username: ${{ gitea.repository_owner }}
-          password: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          buildah login -u "${{ github.repository_owner }}" \
+            -p "${{ secrets.GITHUB_TOKEN }}" \
+            codeberg.org
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: codeberg.org/${{ gitea.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+      - name: Build and tag
+        run: |
+          REGISTRY="codeberg.org/${{ github.repository }}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          MAJOR_MINOR="${VERSION%.*}"
+          buildah build -t "${REGISTRY}:${VERSION}" .
+          buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:${MAJOR_MINOR}"
+          buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:latest"
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Push to registry
+        run: |
+          REGISTRY="codeberg.org/${{ github.repository }}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          MAJOR_MINOR="${VERSION%.*}"
+          buildah push "${REGISTRY}:${VERSION}"
+          buildah push "${REGISTRY}:${MAJOR_MINOR}"
+          buildah push "${REGISTRY}:latest"
