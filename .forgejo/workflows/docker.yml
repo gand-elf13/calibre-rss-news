@@ -11,20 +11,19 @@ jobs:
     env:
       STORAGE_DRIVER: vfs
       BUILDAH_ISOLATION: chroot
+      REGISTRY_AUTH_FILE: /tmp/auth.json
     steps:
       - uses: actions/checkout@v4
-
       - name: Install buildah
         run: |
           apt-get update -qq
           apt-get install -y -qq buildah ca-certificates
-
       - name: Login to Codeberg Container Registry
         run: |
-          buildah login -u "${{ github.repository_owner }}" \
+          buildah login --authfile /tmp/auth.json \
+            -u "${{ github.repository_owner }}" \
             -p "${{ secrets.FORGEJO_TOKEN }}" \
             codeberg.org
-
       - name: Build and tag
         run: |
           REGISTRY="codeberg.org/${{ github.repository }}"
@@ -40,6 +39,6 @@ jobs:
           REGISTRY="codeberg.org/${{ github.repository }}"
           VERSION="${GITHUB_REF_NAME#v}"
           MAJOR_MINOR="${VERSION%.*}"
-          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:${VERSION}"
-          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:${MAJOR_MINOR}"
-          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:latest"
+          buildah --storage-driver="$STORAGE_DRIVER" push --authfile /tmp/auth.json "${REGISTRY}:${VERSION}"
+          buildah --storage-driver="$STORAGE_DRIVER" push --authfile /tmp/auth.json "${REGISTRY}:${MAJOR_MINOR}"
+          buildah --storage-driver="$STORAGE_DRIVER" push --authfile /tmp/auth.json "${REGISTRY}:latest"
