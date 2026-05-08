@@ -1,4 +1,4 @@
-# calibre-rss
+# calibre-rss-news
 
 ## AI Disclaimer
 
