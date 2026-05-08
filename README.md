@@ -20,6 +20,10 @@ Run Calibre `.recipe` files **without Calibre installed** and output standard
 5. Run it on a cron / systemd timer / Docker to keep feeds up to date
 
 ---
+## To-Do
+
+- [ ] Add the section in the headline of the RSS feed
+- [ ] Test with more recipe to check actual compatibility with the format
 
 ## Quick start
 
