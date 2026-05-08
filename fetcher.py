@@ -68,7 +68,7 @@ def _do_get(url, session, encoding):
     raw_bytes = b"".join(chunks)
     if encoding:
         enc = encoding
-    elif r.encoding and r.encoding.lower() not in ('iso-8859-1', 'latin-1'):
+    elif r.encoding and r.encoding.lower() not in ('iso-8859-1', 'latin-1', 'windows-1252', 'cp1252'):
         enc = r.encoding
     else:
         enc = r.apparent_encoding or 'utf-8'

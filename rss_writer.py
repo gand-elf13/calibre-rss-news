@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 
 
 def _esc(s):
-    return html.escape(str(s or ''), quote=True)
+    if isinstance(s, bytes):
+        s = s.decode('utf-8', errors='replace')
+    else:
+        s = str(s or '')
+    return html.escape(s, quote=True)
 
 
 def _atom_date(dt=None):
