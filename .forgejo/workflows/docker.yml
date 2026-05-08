@@ -33,14 +33,13 @@ jobs:
           buildah --storage-driver="$STORAGE_DRIVER" \
             bud --isolation="$BUILDAH_ISOLATION" \
             -t "${REGISTRY}:${VERSION}" .
-          buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:${MAJOR_MINOR}"
-          buildah tag "${REGISTRY}:${VERSION}" "${REGISTRY}:latest"
-
+          buildah --storage-driver="$STORAGE_DRIVER" tag "${REGISTRY}:${VERSION}" "${REGISTRY}:${MAJOR_MINOR}"
+          buildah --storage-driver="$STORAGE_DRIVER" tag "${REGISTRY}:${VERSION}" "${REGISTRY}:latest"
       - name: Push to registry
         run: |
           REGISTRY="codeberg.org/${{ github.repository }}"
           VERSION="${GITHUB_REF_NAME#v}"
           MAJOR_MINOR="${VERSION%.*}"
-          buildah push "${REGISTRY}:${VERSION}"
-          buildah push "${REGISTRY}:${MAJOR_MINOR}"
-          buildah push "${REGISTRY}:latest"
+          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:${VERSION}"
+          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:${MAJOR_MINOR}"
+          buildah --storage-driver="$STORAGE_DRIVER" push "${REGISTRY}:latest"
