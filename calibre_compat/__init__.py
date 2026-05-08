@@ -719,16 +719,18 @@ def _build_html5_parser_shim():
         Must return an lxml _Element, not an ElementTree.
         """
         from lxml import etree
-        from lxml.html import fromstring as html_fromstring
+        from lxml.html import fromstring as html_fromstring, HTMLParser
         try:
+            # Always use UTF-8 encoding explicitly to prevent lxml from 
+            # misinterpreting the charset
             if isinstance(html, str):
                 html = html.encode('utf-8')
-            # html_fromstring returns an HtmlElement (subclass of _Element)
-            # which supports both .xpath() and etree.tostring()
-            return html_fromstring(html)
+            # Use HTMLParser with explicit UTF-8 encoding
+            parser = HTMLParser(encoding='utf-8')
+            return html_fromstring(html, parser=parser)
         except Exception:
             try:
-                # Fallback: parse as generic XML
+                # Fallback: parse as generic XML with explicit UTF-8
                 return etree.fromstring(html)
             except Exception:
                 return etree.Element('html')
