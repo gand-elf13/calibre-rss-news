@@ -161,13 +161,14 @@ def _fetch_one(art, recipe, session):
         return art
 
     if art.get('content_html'):
-        return art  # already have embedded content
+        return art
 
     logger.info(f"  Fetching: {url}")
     content_html, final_url = fetch_article(url, recipe, session=session)
     if content_html:
         art['content_html'] = content_html
         art['url'] = final_url
+    recipe.postprocess_article(art, url)
     return art
 
 

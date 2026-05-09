@@ -512,6 +512,9 @@ class BasicNewsRecipe:
     def populate_article_metadata(self, article, soup, first):
         pass
 
+    def postprocess_article(self, article, url):
+        pass
+
     # ---- index / parsing ----
 
     def parse_index(self):
