@@ -36,7 +36,7 @@ python calibre_rss.py recipes/
 docker run --rm \
   -v ./recipes:/app/recipes:ro \
   -v ./feeds:/app/feeds \
-  codeberg.org/gand_elf/calibre-rss
+   codeberg.org/gand_elf/calibre-rss-news
 
 # Docker (scheduled — runs every hour)
 docker compose up -d
@@ -48,10 +48,10 @@ docker compose up -d
 
 ### Pre-built image
 
-Pull from [Codeberg Container Registry](https://codeberg.org/gand_elf/calibre-rss/-/packages):
+Pull from [Codeberg Container Registry](https://codeberg.org/gand_elf/calibre-rss-news/-/packages):
 
 ```bash
-docker pull codeberg.org/gand_elf/calibre-rss:latest
+docker pull codeberg.org/gand_elf/calibre-rss-news:latest
 ```
 
 ### Build locally
@@ -123,7 +123,7 @@ docker compose up -d
 ## Project layout
 
 ```
-calibre-rss/
+calibre-rss-news/
 ├── calibre_rss.py          # CLI entry point
 ├── calibre_compat/
 │   └── __init__.py         # Calibre module stubs (calibre.web.feeds.news etc.)
