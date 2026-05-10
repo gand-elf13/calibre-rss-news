@@ -12,6 +12,19 @@ from calibre_compat import AbortArticle
 
 logger = logging.getLogger("runner")
 
+
+def _article_identifier(art, keys):
+    """Compute a dedup identifier tuple from an article dict for the given keys.
+    Returns None if any required key is missing."""
+    parts = []
+    for key in keys:
+        val = art.get(key)
+        if not val:
+            return None
+        parts.append(str(val))
+    return tuple(parts)
+
+
 DEFAULT_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -164,24 +177,36 @@ def _fetch_one(art, recipe, session):
         return art
 
     logger.info(f"  Fetching: {url}")
-    content_html, final_url = fetch_article(url, recipe, session=session)
+    content_html, _final_url = fetch_article(url, recipe, session=session)
     if content_html:
         art['content_html'] = content_html
-        art['url'] = final_url
+        # Keep the original article URL — don't overwrite with a
+        # file:/// temp path that print_version() may have returned.
     recipe.postprocess_article(art, url)
     return art
 
 
-def run_recipe(recipe, max_workers=None):
+def run_recipe(recipe, max_workers=None, existing_ids=None):
     """
     Execute the recipe.
     Returns list of article dicts:
         {title, url, content_html, pub_date, author, description, feed_title}
+
+    existing_ids : set[str] | None
+        URLs already present in the persisted feed — articles whose URL
+        matches are skipped (cross-run deduplication).
     """
     workers = max_workers or min(recipe.simultaneous_downloads, 8)
     session = _make_session(recipe)
 
     feeds_data = _feeds_from_recipe(recipe)
+
+    # Cross-run dedup: track URLs already in the persisted feed
+    seen_urls = set(existing_ids) if existing_ids else set()
+    # Within-run dedup: honour recipe-level setting (standard calibre feature)
+    dedup_keys = getattr(recipe, 'ignore_duplicate_articles', None)
+    within_run_seen = set() if dedup_keys is not None else None
+
     all_articles = []
 
     for feed_title, articles in feeds_data:
@@ -191,6 +216,24 @@ def run_recipe(recipe, max_workers=None):
         to_fetch = []
         for art in articles:
             art['feed_title'] = feed_title
+
+            # Cross-run dedup: skip if URL already exists in the persisted feed
+            url = art.get('url')
+            if url and url in seen_urls:
+                logger.debug(f"Skipping article already in feed: {art['title']}")
+                continue
+            if url:
+                seen_urls.add(url)
+
+            # Within-run dedup: same article appearing in multiple sections
+            if within_run_seen is not None:
+                ident = _article_identifier(art, dedup_keys)
+                if ident is not None:
+                    if ident in within_run_seen:
+                        logger.debug(f"Skipping within-run duplicate: {art['title']}")
+                        continue
+                    within_run_seen.add(ident)
+
             if not art.get('content_html'):
                 to_fetch.append(art)
             else:

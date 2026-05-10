@@ -32,13 +32,13 @@ import os
 import sys
 import glob
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ---- ensure the project root is on sys.path ----
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from recipe_loader import load_recipe_file
-from runner import run_recipe
+from runner import run_recipe, _article_identifier
 from rss_writer import write_atom_feed
 
 
@@ -121,15 +121,65 @@ def run_one_recipe(recipe_path, output_dir, jobs, no_content, test_mode, cookies
             except Exception as e:
                 logger.warning(f"  Failed to load cookies from {cp}: {e}")
 
+    # Build output path early (needed for cross-run dedup below)
+    stem = sanitize_filename(Path(recipe_path).stem)
+    out_path = os.path.join(output_dir, f"{stem}.xml")
+
+    # ── cross-run merge: read existing feed ──────────────────────────
+    existing_articles = []
+    existing_ids = set()
+    if os.path.exists(out_path):
+        try:
+            with open(out_path, 'r', encoding='utf-8') as f:
+                existing_xml = f.read()
+            import feedparser
+            parsed = feedparser.parse(existing_xml)
+            for entry in parsed.entries:
+                url = (entry.get('link', '')
+                       or (entry.links[0].href if entry.get('links') else ''))
+                if url:
+                    existing_ids.add(url)
+                existing_articles.append({
+                    'title': entry.get('title', ''),
+                    'url': url,
+                    'description': entry.get('summary', ''),
+                    'pub_date': entry.get('updated', ''),
+                    'author': (entry.get('author')
+                               or entry.get('author_detail', {}).get('name', '')),
+                    'content_html': (entry.content[0].value
+                                     if entry.get('content') else ''),
+                })
+        except Exception as e:
+            logger.warning(f"Failed to read existing feed {out_path}: {e}")
+
     try:
-        articles = run_recipe(recipe, max_workers=jobs)
+        articles = run_recipe(recipe, max_workers=jobs, existing_ids=existing_ids)
     except Exception as e:
         logger.error(f"Recipe run failed for {recipe_path}: {e}")
         import traceback; traceback.print_exc()
         return False
 
     if not articles:
-        logger.warning(f"  No articles found for {recipe.title!r}")
+        logger.warning(f"  No new articles found for {recipe.title!r}")
+
+    # ── merge: new articles first, then existing (pruned by oldest_article) ──
+    if existing_articles:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=recipe.oldest_article)
+        pruned = []
+        for art in existing_articles:
+            pub = art.get('pub_date', '')
+            if pub:
+                try:
+                    from dateutil.parser import parse as _p
+                    dt = _p(str(pub))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt < cutoff:
+                        continue
+                except Exception:
+                    pass
+            pruned.append(art)
+        articles = articles + pruned
 
     # Derive feed URL from recipe (some recipes set cover_url or a homepage)
     feed_url = getattr(recipe, 'INDEX', '') or ''
@@ -142,8 +192,6 @@ def run_one_recipe(recipe_path, output_dir, jobs, no_content, test_mode, cookies
         language=getattr(recipe, 'language', 'en') or 'en',
     )
 
-    stem = sanitize_filename(Path(recipe_path).stem)
-    out_path = os.path.join(output_dir, f"{stem}.xml")
     os.makedirs(output_dir, exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(xml)
